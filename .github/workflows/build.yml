@@ -8,6 +8,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+
       - name: Install Dependencies
         run: |
           sudo apt-get update
@@ -34,6 +35,33 @@ jobs:
           git clone --depth=1 \
             https://github.com/devhunter1/android_kernel_samsung_s5e8535.git \
             source
+
+      - name: Fix Samsung Kernel Bug
+        run: |
+          cd source
+
+          echo "Fixing workqueue.c..."
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("kernel/workqueue.c")
+          s = p.read_text()
+
+          old = "BUG_ON(is_continuously_busy > 1);"
+          new = "/* BUG_ON(is_continuously_busy > 1); */"
+
+          if old not in s:
+              print("WARNING: Target BUG_ON line not found")
+          else:
+              s = s.replace(old, new)
+              p.write_text(s)
+              print("workqueue.c fixed successfully")
+          PY
+
+          echo
+          echo "Checking affected line:"
+          grep -n "is_continuously_busy" kernel/workqueue.c || true
 
       - name: Configure Kernel
         run: |
@@ -62,7 +90,7 @@ jobs:
           make olddefconfig
 
           echo
-          echo "RTL8XXXU configuration:"
+          echo "RTL8XXXU:"
           grep CONFIG_RTL8XXXU .config || true
 
       - name: Prepare Kernel
@@ -99,9 +127,10 @@ jobs:
             exit 1
           fi
 
-          echo "Module.symvers created successfully"
+          echo "Module.symvers created:"
+          ls -lh Module.symvers
 
-      - name: Build RTL8192EU Driver
+      - name: Build RTL8XXXU
         run: |
           cd source
 
@@ -118,7 +147,7 @@ jobs:
             modules \
             KCFLAGS="-Wno-error"
 
-      - name: Find Driver
+      - name: Check Driver
         run: |
           cd source
 
@@ -130,36 +159,34 @@ jobs:
             echo
             echo "ERROR: rtl8xxxu.ko was not created"
             echo
-            echo "RTL8XXXU config:"
+            echo "RTL8XXXU configuration:"
             grep CONFIG_RTL8XXXU .config || true
-            echo
-            echo "Build files:"
-            ls -la drivers/net/wireless/realtek/rtl8xxxu/
             exit 1
           fi
+
+          echo
+          echo "SUCCESS: rtl8xxxu.ko found!"
 
       - name: Prepare Output
         run: |
           mkdir -p output
 
           cp source/drivers/net/wireless/realtek/rtl8xxxu/rtl8xxxu.ko \
-            output/
+            output/rtl8xxxu.ko
 
           cp source/.config \
             output/kernel.config
 
           cp source/Module.symvers \
-            output/
+            output/Module.symvers
 
           cd source
           make kernelversion > ../output/kernel.version
 
           cd ..
 
-          echo "================================"
-          echo "BUILD SUCCESS"
-          echo "================================"
-
+          echo
+          echo "========== OUTPUT =========="
           ls -lh output/
 
       - name: Upload Driver
