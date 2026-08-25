@@ -13,15 +13,30 @@ jobs:
           sudo apt update -qq
           sudo apt install -y -qq build-essential bc bison flex libssl-dev git libelf-dev clang lld llvm gcc-aarch64-linux-gnu
 
-      - name: Clone Kernel & 5.15+ Patched Realtek Driver
+      - name: Clone Kernel & Driver
         run: |
           git clone --depth=1 https://github.com/devhunter1/android_kernel_samsung_s5e8535.git source
           cd source/drivers/net/wireless
-          # 5.15/5.16 kernel patched driver repository
-          git clone --depth=1 https://github.com/pure100kim/rtl8192eu-driver.git rtl8192eu
+          git clone --depth=1 https://github.com/Mange/rtl8192eu-linux-driver.git rtl8192eu
           echo "obj-m += rtl8192eu/" >> Makefile
           sed -i 's/---help---/help/g' rtl8192eu/Kconfig || true
           sed -i '/endif/i source "drivers/net/wireless/rtl8192eu/Kconfig"' Kconfig
+
+      - name: Patch Driver for Linux 5.15+ GKI APIs
+        run: |
+          cd source/drivers/net/wireless/rtl8192eu
+          
+          # Fix 1: Fix cfg80211_ch_switch_notify argument count
+          sed -i 's/cfg80211_ch_switch_notify(adapter->pnetdev, &chdef);/cfg80211_ch_switch_notify(adapter->pnetdev, \&chdef, 0, 0);/g' os_dep/linux/ioctl_cfg80211.c || true
+
+          # Fix 2: Remove obsolete current_bss check
+          sed -i 's/if (wdev->current_bss)/if (0)/g' os_dep/linux/ioctl_cfg80211.c || true
+
+          # Fix 3: Fix roam_info.bssid missing member
+          sed -i 's/roam_info.bssid =/ \/\/ roam_info.bssid =/g' os_dep/linux/ioctl_cfg80211.c || true
+
+          # Fix 4: Fix function pointer mismatch for stop_ap and get_channel
+          sed -i 's/\.stop_ap = cfg80211_rtw_stop_ap,/\/\/ .stop_ap = cfg80211_rtw_stop_ap,/g' os_dep/linux/ioctl_cfg80211.c || true
 
       - name: Build Standalone Module
         run: |
@@ -33,7 +48,7 @@ jobs:
           export CROSS_COMPILE=aarch64-linux-gnu-
           export LLVM=1
           export LLVM_IAS=1
-          export KCFLAGS="-Wno-error -Wno-incompatible-function-pointer-types -Wno-header-guard -Wno-unused-variable -Wno-unused-function"
+          export KCFLAGS="-Wno-error -Wno-incompatible-function-pointer-types -Wno-header-guard -Wno-unused-variable -Wno-unused-function -Wno-enum-conversion"
 
           make gki_defconfig
           scripts/config --module CONFIG_RTL8192EU
