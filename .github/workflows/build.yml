@@ -13,10 +13,11 @@ jobs:
           sudo apt update -qq
           sudo apt install -y -qq build-essential bc bison flex libssl-dev git libelf-dev clang lld llvm gcc-aarch64-linux-gnu
 
-      - name: Clone Kernel Source & 5.15 Ready Driver
+      - name: Clone Kernel Source & Active Driver
         run: |
           git clone --depth=1 https://github.com/devhunter1/android_kernel_samsung_s5e8535.git source
-          git clone --depth=1 https://github.com/lwfinger/rtl8192eu.git rtl8192eu
+          # Using aircrack-ng active public repository for rtl8192eu
+          git clone --depth=1 https://github.com/aircrack-ng/rtl8192eu.git rtl8192eu
 
       - name: Prepare Kernel Headers
         run: |
