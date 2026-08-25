@@ -17,7 +17,7 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/devhunter1/android_kernel_samsung_s5e8535.git source
 
-      - name: Configure & Build Realtek In-Tree Driver
+      - name: Configure and Full Module Build
         run: |
           cd source
           export ARCH=arm64
@@ -30,7 +30,9 @@ jobs:
 
           make gki_defconfig
 
-          # Enable wireless stack and the rtl8xxxu driver
+          # Enable complete networking, mac80211, and Realtek rtl8xxxu
+          scripts/config --enable CONFIG_NETDEVICES
+          scripts/config --enable CONFIG_WLAN
           scripts/config --enable CONFIG_WIRELESS
           scripts/config --enable CONFIG_CFG80211
           scripts/config --enable CONFIG_MAC80211
@@ -38,17 +40,21 @@ jobs:
           scripts/config --enable CONFIG_RTL8XXXU_UNTESTED
 
           make olddefconfig
-          make modules_prepare
+          
+          # Step 1: Build kernel symbols required for .ko linking
+          make -j$(nproc) vmlinux KCFLAGS="-Wno-error"
+          
+          # Step 2: Build and link all kernel modules into binary .ko files
+          make -j$(nproc) modules KCFLAGS="-Wno-error"
 
-          # Compile and explicitly link .ko module binary
-          make -j$(nproc) M=drivers/net/wireless/realtek/rtl8xxxu modules KCFLAGS="-Wno-error"
-
-          # Collect generated .ko files into output directory
+          # Step 3: Collect generated .ko files
           mkdir -p ../output
-          find drivers/net/wireless/realtek/rtl8xxxu/ -name "*.ko" -exec cp -v {} ../output/ \;
+          find . -name "rtl8xxxu.ko" -exec cp -v {} ../output/ \;
+          find . -name "mac80211.ko" -exec cp -v {} ../output/ \; 2>/dev/null || true
+          find . -name "cfg80211.ko" -exec cp -v {} ../output/ \; 2>/dev/null || true
 
       - name: Upload Module Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rtl8xxxu-driver-module
+          name: rtl8xxxu-kernel-modules
           path: output/*.ko
