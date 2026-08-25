@@ -19,6 +19,7 @@ jobs:
             flex \
             libssl-dev \
             libelf-dev \
+            libdw-dev \
             git \
             clang \
             lld \
@@ -37,7 +38,34 @@ jobs:
             https://github.com/devhunter1/android_kernel_samsung_s5e8535.git \
             source
 
-      - name: Configure Samsung Kernel
+      - name: Find Kernel Configuration
+        run: |
+          cd source
+
+          echo "Available ARM64 configurations:"
+          find arch/arm64/configs \
+            -maxdepth 2 \
+            -type f \
+            -name '*defconfig' \
+            -print | sort
+
+          echo
+          echo "Searching for S5E8535 configurations:"
+
+          find arch/arm64/configs \
+            -type f \
+            -iname '*s5e8535*' \
+            -print || true
+
+          echo
+          echo "Searching for Samsung A14 configurations:"
+
+          find arch/arm64/configs \
+            -type f \
+            -iname '*a14*' \
+            -print || true
+
+      - name: Configure Kernel
         run: |
           cd source
 
@@ -49,47 +77,64 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=aarch64-linux-gnu-
 
-          # Use Samsung's own device configuration
-          make s5e8535-a14xxx_defconfig
+          CONFIG=""
 
-          # Enable required dependencies
+          # Look for the most likely S5E8535 configuration.
+          CONFIG=$(find arch/arm64/configs \
+            -type f \
+            -iname '*s5e8535*defconfig' \
+            | head -1 || true)
+
+          # If no S5E8535 config exists, look for A14.
+          if [ -z "$CONFIG" ]; then
+            CONFIG=$(find arch/arm64/configs \
+              -type f \
+              -iname '*a14*defconfig' \
+              | head -1 || true)
+          fi
+
+          # If still nothing, use gki_defconfig if available.
+          if [ -z "$CONFIG" ] && \
+             [ -f arch/arm64/configs/gki_defconfig ]; then
+            CONFIG="arch/arm64/configs/gki_defconfig"
+          fi
+
+          if [ -z "$CONFIG" ]; then
+            echo "ERROR: No suitable ARM64 defconfig found."
+            exit 1
+          fi
+
+          CONFIG_NAME=$(basename "$CONFIG" | sed 's/_defconfig$//')
+
+          echo "Using configuration:"
+          echo "$CONFIG"
+
+          make "$CONFIG_NAME"
+
+          # Required dependencies
           scripts/config --enable CONFIG_USB
           scripts/config --enable CONFIG_WLAN
           scripts/config --enable CONFIG_WIRELESS
           scripts/config --enable CONFIG_MAC80211
           scripts/config --enable CONFIG_CFG80211
-          scripts/config --enable CONFIG_WLAN_VENDOR_REALTEK
           scripts/config --enable CONFIG_MODULES
+          scripts/config --enable CONFIG_WLAN_VENDOR_REALTEK
 
-          # Directly set RTL8XXXU to module
+          # RTL8XXXU
           scripts/config --module CONFIG_RTL8XXXU
 
-          # Experimental USB devices
-          scripts/config --enable CONFIG_RTL8XXXU_UNTESTED
-
-          # Resolve dependencies
           make olddefconfig
 
           echo
           echo "===== RTL CONFIG ====="
 
           grep -E \
-            'CONFIG_(USB|WLAN|WIRELESS|MAC80211|CFG80211|WLAN_VENDOR_REALTEK|RTL8XXXU|MODULES)' \
+            'CONFIG_(USB|WLAN|WIRELESS|MAC80211|CFG80211|MODULES|WLAN_VENDOR_REALTEK|RTL8XXXU)' \
             .config || true
 
-          echo
-          echo "===== FORCE RTL8XXXU MODULE ====="
-
-          # olddefconfig may disable it in this Samsung configuration.
-          # Force the final .config entry after dependency resolution.
-          sed -i '/^CONFIG_RTL8XXXU=/d' .config
-          echo 'CONFIG_RTL8XXXU=m' >> .config
-
-          echo
-          grep '^CONFIG_RTL8XXXU=' .config
-
           if ! grep -q '^CONFIG_RTL8XXXU=m$' .config; then
-            echo "ERROR: CONFIG_RTL8XXXU=m not present"
+            echo
+            echo "ERROR: CONFIG_RTL8XXXU=m is not enabled."
             exit 1
           fi
 
@@ -129,25 +174,27 @@ jobs:
             KCFLAGS="-Wno-error" \
             2>&1 | tee ../rtl8xxxu-build.log
 
-      - name: Check Driver
+      - name: Verify Module
         run: |
           cd source
 
-          echo
-          echo "===== SEARCHING MODULE ====="
+          echo "Searching for rtl8xxxu.ko..."
 
-          find . -name "rtl8xxxu.ko" -print
+          find . \
+            -type f \
+            -name "rtl8xxxu.ko" \
+            -print
 
           if [ ! -f \
             drivers/net/wireless/realtek/rtl8xxxu/rtl8xxxu.ko ]; then
 
             echo
-            echo "ERROR: rtl8xxxu.ko was not created"
+            echo "ERROR: rtl8xxxu.ko was not created."
 
             echo
             echo "CONFIG:"
             grep -E \
-              'CONFIG_(RTL8XXXU|MAC80211|CFG80211|USB|WLAN)' \
+              'CONFIG_(RTL8XXXU|MAC80211|CFG80211|WLAN|USB|MODULES)' \
               .config || true
 
             echo
@@ -165,12 +212,9 @@ jobs:
 
           echo
           echo "======================================"
-          echo "SUCCESS!"
+          echo "SUCCESS"
           echo "rtl8xxxu.ko CREATED"
           echo "======================================"
-
-          file \
-            drivers/net/wireless/realtek/rtl8xxxu/rtl8xxxu.ko
 
       - name: Create Output
         run: |
@@ -185,21 +229,22 @@ jobs:
             output/kernel.config
 
           if [ -f source/Module.symvers ]; then
-            cp source/Module.symvers output/Module.symvers
+            cp source/Module.symvers \
+              output/Module.symvers
           fi
 
           cd source
-          make kernelversion > ../output/kernel.version
+
+          make kernelversion \
+            > ../output/kernel.version
 
           cd ..
 
-          echo
-          echo "===== OUTPUT ====="
-          ls -lh output/
+          file output/rtl8xxxu.ko
 
           echo
-          echo "===== MODULE INFO ====="
-          modinfo output/rtl8xxxu.ko || true
+          echo "Output:"
+          ls -lh output/
 
       - name: Upload Driver
         uses: actions/upload-artifact@v4
@@ -217,3 +262,4 @@ jobs:
           path: rtl8xxxu-build.log
           if-no-files-found: ignore
           retention-days: 30
+        
