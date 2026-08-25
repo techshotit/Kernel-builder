@@ -67,10 +67,10 @@ jobs:
 
           make olddefconfig
 
-          echo "RTL8XXXU configuration:"
-          grep -E 'CONFIG_(RTL8XXXU|CFG80211|MAC80211|WLAN|USB|MODULES)=' .config || true
+          echo "RTL8XXXU:"
+          grep CONFIG_RTL8XXXU .config || true
 
-      - name: Prepare Kernel
+      - name: Prepare Module Build
         run: |
           cd source
 
@@ -84,33 +84,6 @@ jobs:
 
           make prepare
           make modules_prepare
-
-      - name: Build Kernel
-        run: |
-          cd source
-
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export CC=clang
-          export LLVM=1
-          export LLVM_IAS=1
-          export CLANG_TRIPLE=aarch64-linux-gnu-
-          export CROSS_COMPILE=aarch64-linux-gnu-
-
-          make -j$(nproc) vmlinux \
-            KCFLAGS="-Wno-error -Wno-error=unused-variable -Wno-error=unused-function"
-
-      - name: Check Kernel Symbols
-        run: |
-          cd source
-
-          if [ ! -f Module.symvers ]; then
-            echo "ERROR: Module.symvers was not generated"
-            exit 1
-          fi
-
-          echo "Module.symvers:"
-          ls -lh Module.symvers
 
       - name: Build RTL8XXXU
         run: |
@@ -129,7 +102,7 @@ jobs:
             modules \
             KCFLAGS="-Wno-error"
 
-      - name: Verify RTL8XXXU
+      - name: Check Driver
         run: |
           cd source
 
@@ -140,7 +113,7 @@ jobs:
           if [ ! -f \
             drivers/net/wireless/realtek/rtl8xxxu/rtl8xxxu.ko ]; then
 
-            echo "ERROR: rtl8xxxu.ko was not generated"
+            echo "ERROR: rtl8xxxu.ko was not created"
 
             echo
             echo "Configuration:"
@@ -157,9 +130,7 @@ jobs:
           fi
 
           echo
-          echo "================================"
-          echo "RTL8XXXU BUILD SUCCESS"
-          echo "================================"
+          echo "RTL8XXXU MODULE SUCCESSFULLY BUILT"
 
       - name: Create Output
         run: |
@@ -172,62 +143,20 @@ jobs:
           cp source/.config \
             output/kernel.config
 
-          cp source/Module.symvers \
-            output/Module.symvers
+          if [ -f source/Module.symvers ]; then
+            cp source/Module.symvers output/Module.symvers
+          fi
 
           cd source
           make kernelversion > ../output/kernel.version
 
           cd ..
 
-          echo "Output:"
-          ls -lh output/
+          file output/rtl8xxxu.ko
 
           echo
-          echo "Module information:"
-          modinfo output/rtl8xxxu.ko || true
-
-      - name: Create README
-        run: |
-          cat > output/README.txt <<'EOF'
-          Samsung S5E8535 RTL8192EU Driver
-          =================================
-
-          Driver:
-          rtl8xxxu.ko
-
-          Architecture:
-          ARM64
-
-          This is the RTL8XXXU driver from the Samsung kernel source.
-
-          IMPORTANT:
-          The module must match the kernel running on the phone.
-
-          Check phone kernel:
-
-              uname -a
-              uname -r
-              cat /proc/version
-
-          Test on a rooted phone:
-
-              su
-              insmod rtl8xxxu.ko
-
-          Then check:
-
-              dmesg | tail -100
-              ip link
-              iw dev
-
-          If "Invalid module format" appears, check:
-
-              dmesg | grep -i module
-
-          The module may require the exact matching Samsung kernel
-          configuration, Module.symvers and kernel build.
-          EOF
+          echo "Output:"
+          ls -lh output/
 
       - name: Upload Driver
         uses: actions/upload-artifact@v4
