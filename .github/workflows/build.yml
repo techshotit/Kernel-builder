@@ -30,7 +30,7 @@ jobs:
 
           make gki_defconfig
 
-          # Enable mac80211, cfg80211 and rtl8xxxu driver
+          # Enable wireless stack and the rtl8xxxu driver
           scripts/config --enable CONFIG_WIRELESS
           scripts/config --enable CONFIG_CFG80211
           scripts/config --enable CONFIG_MAC80211
@@ -39,14 +39,16 @@ jobs:
 
           make olddefconfig
           make modules_prepare
-          make -j$(nproc) M=drivers/net/wireless/realtek/rtl8xxxu KCFLAGS="-Wno-error"
 
-          # Collect generated .ko files
-          mkdir -p ../artifacts
-          find . -name "*.ko" -exec cp {} ../artifacts/ \;
+          # Compile and explicitly link .ko module binary
+          make -j$(nproc) M=drivers/net/wireless/realtek/rtl8xxxu modules KCFLAGS="-Wno-error"
+
+          # Collect generated .ko files into output directory
+          mkdir -p ../output
+          find drivers/net/wireless/realtek/rtl8xxxu/ -name "*.ko" -exec cp -v {} ../output/ \;
 
       - name: Upload Module Artifact
         uses: actions/upload-artifact@v4
         with:
           name: rtl8xxxu-driver-module
-          path: artifacts/*.ko
+          path: output/*.ko
