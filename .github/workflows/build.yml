@@ -13,11 +13,12 @@ jobs:
           sudo apt update -qq
           sudo apt install -y -qq build-essential bc bison flex libssl-dev git libelf-dev clang lld llvm gcc-aarch64-linux-gnu
 
-      - name: Clone Kernel & Modern Realtek Driver
+      - name: Clone Kernel & 5.15+ Patched Realtek Driver
         run: |
           git clone --depth=1 https://github.com/devhunter1/android_kernel_samsung_s5e8535.git source
           cd source/drivers/net/wireless
-          git clone --depth=1 https://github.com/Mange/rtl8192eu-linux-driver.git rtl8192eu
+          # 5.15/5.16 kernel patched driver repository
+          git clone --depth=1 https://github.com/pure100kim/rtl8192eu-driver.git rtl8192eu
           echo "obj-m += rtl8192eu/" >> Makefile
           sed -i 's/---help---/help/g' rtl8192eu/Kconfig || true
           sed -i '/endif/i source "drivers/net/wireless/rtl8192eu/Kconfig"' Kconfig
@@ -32,7 +33,7 @@ jobs:
           export CROSS_COMPILE=aarch64-linux-gnu-
           export LLVM=1
           export LLVM_IAS=1
-          export KCFLAGS="-Wno-error"
+          export KCFLAGS="-Wno-error -Wno-incompatible-function-pointer-types -Wno-header-guard -Wno-unused-variable -Wno-unused-function"
 
           make gki_defconfig
           scripts/config --module CONFIG_RTL8192EU
