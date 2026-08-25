@@ -11,14 +11,14 @@ jobs:
       - name: Install Toolchain & Dependencies
         run: |
           sudo apt update -qq
-          sudo apt install -y -qq build-essential bc bison flex libssl-dev git libelf-dev clang lld llvm gcc-aarch64-linux-gnu curl
+          sudo apt install -y -qq build-essential bc bison flex libssl-dev git libelf-dev clang lld llvm gcc-aarch64-linux-gnu curl tar
 
-      - name: Clone Kernel Source & Download Verified Driver Archive
+      - name: Clone Kernel Source & Download 5.15-Patched Driver
         run: |
           git clone --depth=1 https://github.com/devhunter1/android_kernel_samsung_s5e8535.git source
           mkdir -p source/drivers/net/wireless/rtl8192eu
-          # Direct HTTP archive download (No Git authentication failure)
-          curl -sL https://github.com/Mange/rtl8192eu-linux-driver/archive/refs/heads/realtek-4.4.x.tar.gz | tar -xz -C source/drivers/net/wireless/rtl8192eu --strip-components=1
+          # Download 5.15/5.16 patched driver codebase
+          curl -sL https://github.com/quickreflex/rtl8192eu-5.15.77/archive/refs/heads/main.tar.gz | tar -xz -C source/drivers/net/wireless/rtl8192eu --strip-components=1
           echo "obj-m += rtl8192eu/" >> source/drivers/net/wireless/Makefile
           sed -i 's/---help---/help/g' source/drivers/net/wireless/rtl8192eu/Kconfig || true
           sed -i '/endif/i source "drivers/net/wireless/rtl8192eu/Kconfig"' source/drivers/net/wireless/Kconfig
@@ -48,7 +48,7 @@ jobs:
           export LLVM_IAS=1
           export KBUILD_MODPOST_WARN=1
 
-          make -j$(nproc) M=drivers/net/wireless/rtl8192eu modules EXTRA_CFLAGS="-Wno-error -Wno-incompatible-pointer-types -Wno-declaration-after-statement -Wno-unused-function -Wno-unused-variable -Wno-enum-conversion"
+          make -j$(nproc) M=drivers/net/wireless/rtl8192eu modules KCFLAGS="-Wno-error -Wno-incompatible-pointer-types -Wno-declaration-after-statement -Wno-unused-function -Wno-unused-variable -Wno-enum-conversion -Wno-header-guard"
 
       - name: Upload Finished Driver Artifact
         uses: actions/upload-artifact@v4
