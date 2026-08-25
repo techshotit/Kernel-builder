@@ -36,33 +36,6 @@ jobs:
             https://github.com/devhunter1/android_kernel_samsung_s5e8535.git \
             source
 
-      - name: Fix Samsung Kernel Bug
-        run: |
-          cd source
-
-          echo "Fixing workqueue.c..."
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path("kernel/workqueue.c")
-          s = p.read_text()
-
-          old = "BUG_ON(is_continuously_busy > 1);"
-          new = "/* BUG_ON(is_continuously_busy > 1); */"
-
-          if old not in s:
-              print("WARNING: Target BUG_ON line not found")
-          else:
-              s = s.replace(old, new)
-              p.write_text(s)
-              print("workqueue.c fixed successfully")
-          PY
-
-          echo
-          echo "Checking affected line:"
-          grep -n "is_continuously_busy" kernel/workqueue.c || true
-
       - name: Configure Kernel
         run: |
           cd source
@@ -87,11 +60,15 @@ jobs:
           scripts/config --enable CONFIG_MODULES
           scripts/config --module CONFIG_RTL8XXXU
 
+          if grep -q "config RTL8XXXU_UNTESTED" \
+            drivers/net/wireless/realtek/rtl8xxxu/Kconfig; then
+            scripts/config --enable CONFIG_RTL8XXXU_UNTESTED
+          fi
+
           make olddefconfig
 
-          echo
-          echo "RTL8XXXU:"
-          grep CONFIG_RTL8XXXU .config || true
+          echo "RTL8XXXU configuration:"
+          grep -E 'CONFIG_(RTL8XXXU|CFG80211|MAC80211|WLAN|USB|MODULES)=' .config || true
 
       - name: Prepare Kernel
         run: |
@@ -108,7 +85,7 @@ jobs:
           make prepare
           make modules_prepare
 
-      - name: Build Kernel Symbols
+      - name: Build Kernel
         run: |
           cd source
 
@@ -120,14 +97,19 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=aarch64-linux-gnu-
 
-          make -j$(nproc) vmlinux KCFLAGS="-Wno-error"
+          make -j$(nproc) vmlinux \
+            KCFLAGS="-Wno-error -Wno-error=unused-variable -Wno-error=unused-function"
+
+      - name: Check Kernel Symbols
+        run: |
+          cd source
 
           if [ ! -f Module.symvers ]; then
-            echo "ERROR: Module.symvers not found"
+            echo "ERROR: Module.symvers was not generated"
             exit 1
           fi
 
-          echo "Module.symvers created:"
+          echo "Module.symvers:"
           ls -lh Module.symvers
 
       - name: Build RTL8XXXU
@@ -147,7 +129,7 @@ jobs:
             modules \
             KCFLAGS="-Wno-error"
 
-      - name: Check Driver
+      - name: Verify RTL8XXXU
         run: |
           cd source
 
@@ -155,23 +137,36 @@ jobs:
 
           find . -name "rtl8xxxu.ko" -print
 
-          if [ ! -f drivers/net/wireless/realtek/rtl8xxxu/rtl8xxxu.ko ]; then
+          if [ ! -f \
+            drivers/net/wireless/realtek/rtl8xxxu/rtl8xxxu.ko ]; then
+
+            echo "ERROR: rtl8xxxu.ko was not generated"
+
             echo
-            echo "ERROR: rtl8xxxu.ko was not created"
+            echo "Configuration:"
+            grep -E \
+              'CONFIG_(RTL8XXXU|CFG80211|MAC80211|WLAN|USB|MODULES)=' \
+              .config || true
+
             echo
-            echo "RTL8XXXU configuration:"
-            grep CONFIG_RTL8XXXU .config || true
+            echo "Driver directory:"
+            ls -la \
+              drivers/net/wireless/realtek/rtl8xxxu/
+
             exit 1
           fi
 
           echo
-          echo "SUCCESS: rtl8xxxu.ko found!"
+          echo "================================"
+          echo "RTL8XXXU BUILD SUCCESS"
+          echo "================================"
 
-      - name: Prepare Output
+      - name: Create Output
         run: |
           mkdir -p output
 
-          cp source/drivers/net/wireless/realtek/rtl8xxxu/rtl8xxxu.ko \
+          cp \
+            source/drivers/net/wireless/realtek/rtl8xxxu/rtl8xxxu.ko \
             output/rtl8xxxu.ko
 
           cp source/.config \
@@ -185,9 +180,54 @@ jobs:
 
           cd ..
 
-          echo
-          echo "========== OUTPUT =========="
+          echo "Output:"
           ls -lh output/
+
+          echo
+          echo "Module information:"
+          modinfo output/rtl8xxxu.ko || true
+
+      - name: Create README
+        run: |
+          cat > output/README.txt <<'EOF'
+          Samsung S5E8535 RTL8192EU Driver
+          =================================
+
+          Driver:
+          rtl8xxxu.ko
+
+          Architecture:
+          ARM64
+
+          This is the RTL8XXXU driver from the Samsung kernel source.
+
+          IMPORTANT:
+          The module must match the kernel running on the phone.
+
+          Check phone kernel:
+
+              uname -a
+              uname -r
+              cat /proc/version
+
+          Test on a rooted phone:
+
+              su
+              insmod rtl8xxxu.ko
+
+          Then check:
+
+              dmesg | tail -100
+              ip link
+              iw dev
+
+          If "Invalid module format" appears, check:
+
+              dmesg | grep -i module
+
+          The module may require the exact matching Samsung kernel
+          configuration, Module.symvers and kernel build.
+          EOF
 
       - name: Upload Driver
         uses: actions/upload-artifact@v4
@@ -195,3 +235,4 @@ jobs:
           name: rtl8192eu-s5e8535
           path: output/
           if-no-files-found: error
+          retention-days: 30
