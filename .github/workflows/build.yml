@@ -1,63 +1,456 @@
-name: Build RTL8192EU Kernel Module
+name: Build RTL8192EU Kernel Module - S5E8535
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
+    name: Build RTL8XXXU for Samsung S5E8535
     runs-on: ubuntu-22.04
 
+    env:
+      ARCH: arm64
+      SUBARCH: arm64
+      LLVM: 1
+      LLVM_IAS: 1
+      CLANG_TRIPLE: aarch64-linux-gnu-
+      CROSS_COMPILE: aarch64-linux-gnu-
+
     steps:
+
+      # ------------------------------------------------------------
+      # 1. Install build dependencies
+      # ------------------------------------------------------------
       - name: Install Toolchain & Dependencies
         run: |
-          sudo apt update -qq
-          sudo apt install -y -qq build-essential bc bison flex libssl-dev git libelf-dev clang lld llvm gcc-aarch64-linux-gnu
+          set -eux
 
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            build-essential \
+            bc \
+            bison \
+            flex \
+            libssl-dev \
+            libelf-dev \
+            libdw-dev \
+            git \
+            clang \
+            lld \
+            llvm \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu \
+            python3 \
+            rsync \
+            cpio \
+            kmod
+
+          clang --version
+          ld.lld --version
+          aarch64-linux-gnu-gcc --version
+
+
+      # ------------------------------------------------------------
+      # 2. Clone Samsung S5E8535 kernel
+      # ------------------------------------------------------------
       - name: Clone Samsung Kernel Source
         run: |
-          git clone --depth=1 https://github.com/devhunter1/android_kernel_samsung_s5e8535.git source
+          set -eux
 
-      - name: Fix Samsung Source Bug & Configure
-        run: |
+          git clone \
+            --depth=1 \
+            --branch lineage-23.2 \
+            https://github.com/devhunter1/android_kernel_samsung_s5e8535.git \
+            source
+
           cd source
-          # Fix Samsung's undeclared variable bug in workqueue.c
-          sed -i 's/BUG_ON(is_continuously_busy > 1);//g' kernel/workqueue.c
+
+          echo "Kernel commit:"
+          git log -1 --oneline
+
+          echo
+          echo "Kernel version:"
+          make kernelversion || true
+
+
+      # ------------------------------------------------------------
+      # 3. Check that RTL8XXXU exists
+      # ------------------------------------------------------------
+      - name: Verify RTL8XXXU Driver
+        run: |
+          set -eux
+
+          cd source
+
+          DRIVER_DIR="drivers/net/wireless/realtek/rtl8xxxu"
+
+          if [ ! -d "$DRIVER_DIR" ]; then
+            echo "ERROR: rtl8xxxu driver directory not found!"
+            exit 1
+          fi
+
+          echo "RTL8XXXU source found:"
+          ls -la "$DRIVER_DIR"
+
+          echo
+          echo "Checking RTL8192E support..."
+
+          grep -Rni \
+            -E '8192EU|RTL8192E|0bda.*[0-9a-fA-F]{4}' \
+            "$DRIVER_DIR" \
+            || true
+
+
+      # ------------------------------------------------------------
+      # 4. Fix Samsung source issue
+      # ------------------------------------------------------------
+      - name: Apply Samsung Source Fixes
+        run: |
+          set -eux
+
+          cd source
+
+          # Samsung source contains an undeclared-variable issue
+          # in some revisions of kernel/workqueue.c.
+          if grep -q "BUG_ON(is_continuously_busy > 1);" kernel/workqueue.c; then
+            sed -i \
+              's/BUG_ON(is_continuously_busy > 1);//g' \
+              kernel/workqueue.c
+          fi
+
+          echo "Source fixes applied."
+
+
+      # ------------------------------------------------------------
+      # 5. Configure kernel
+      # ------------------------------------------------------------
+      - name: Configure Kernel
+        run: |
+          set -eux
+
+          cd source
 
           export ARCH=arm64
           export SUBARCH=arm64
           export CC=clang
-          export CLANG_TRIPLE=aarch64-linux-gnu-
-          export CROSS_COMPILE=aarch64-linux-gnu-
           export LLVM=1
           export LLVM_IAS=1
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-gnu-
 
+          # Start with Samsung/Android GKI configuration.
           make gki_defconfig
 
-          # Enable complete networking, mac80211, and Realtek driver
+          echo
+          echo "Enabling wireless stack..."
+
+          # Networking
+          scripts/config --enable CONFIG_NET
           scripts/config --enable CONFIG_NETDEVICES
           scripts/config --enable CONFIG_WLAN
           scripts/config --enable CONFIG_WIRELESS
+
+          # cfg80211 / mac80211
           scripts/config --enable CONFIG_CFG80211
           scripts/config --enable CONFIG_MAC80211
+
+          # USB
+          scripts/config --enable CONFIG_USB
+          scripts/config --enable CONFIG_USB_USBNET
+
+          # Realtek USB driver
           scripts/config --module CONFIG_RTL8XXXU
+
+          # Allow the RTL8XXXU driver to expose additional devices
           scripts/config --enable CONFIG_RTL8XXXU_UNTESTED
 
+          # Module support
+          scripts/config --enable CONFIG_MODULES
+
+          # Keep module versioning if the Samsung configuration uses it.
+          if grep -q '^CONFIG_MODVERSIONS=y' .config; then
+            echo "CONFIG_MODVERSIONS is enabled."
+          fi
+
+          # Resolve dependencies.
           make olddefconfig
 
-          # Step 1: Build kernel symbols
-          make -j$(nproc) vmlinux KCFLAGS="-Wno-error"
+          echo
+          echo "========== RTL CONFIGURATION =========="
 
-          # Step 2: Build and link all kernel modules
-          make -j$(nproc) modules KCFLAGS="-Wno-error"
+          grep -E \
+            'CONFIG_(NET|NETDEVICES|WLAN|WIRELESS|CFG80211|MAC80211|USB|RTL8XXXU|MODULES|MODVERSIONS)' \
+            .config \
+            || true
 
-          # Step 3: Collect generated .ko files
+          echo
+          echo "======================================="
+
+
+      # ------------------------------------------------------------
+      # 6. Prepare kernel build
+      # ------------------------------------------------------------
+      - name: Prepare Kernel Build
+        run: |
+          set -eux
+
+          cd source
+
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CC=clang
+          export LLVM=1
+          export LLVM_IAS=1
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-gnu-
+
+          make \
+            -j"$(nproc)" \
+            prepare
+
+          make \
+            -j"$(nproc)" \
+            modules_prepare
+
+
+      # ------------------------------------------------------------
+      # 7. Build RTL8XXXU only
+      # ------------------------------------------------------------
+      - name: Build RTL8XXXU Module
+        run: |
+          set -eux
+
+          cd source
+
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CC=clang
+          export LLVM=1
+          export LLVM_IAS=1
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-gnu-
+
+          echo "Building rtl8xxxu.ko..."
+
+          make \
+            -j"$(nproc)" \
+            M=drivers/net/wireless/realtek/rtl8xxxu \
+            modules \
+            KCFLAGS="-Wno-error"
+
+
+      # ------------------------------------------------------------
+      # 8. Locate module
+      # ------------------------------------------------------------
+      - name: Locate Built Module
+        run: |
+          set -eux
+
+          cd source
+
+          echo "Searching for RTL8XXXU module..."
+
+          find . \
+            -type f \
+            \( \
+              -name "rtl8xxxu.ko" \
+              -o -name "rtl8xxxu.ko.gz" \
+              -o -name "rtl8xxxu.ko.xz" \
+            \) \
+            -print
+
+          if ! find . -name "rtl8xxxu.ko" | grep -q .; then
+            echo
+            echo "ERROR: rtl8xxxu.ko was not produced."
+            echo
+            echo "Possible build files:"
+            find drivers/net/wireless/realtek/rtl8xxxu \
+              -maxdepth 1 \
+              -type f \
+              -print
+            exit 1
+          fi
+
+
+      # ------------------------------------------------------------
+      # 9. Collect module
+      # ------------------------------------------------------------
+      - name: Package RTL8192EU Driver
+        run: |
+          set -eux
+
+          cd source
+
           mkdir -p ../output
-          find . -name "rtl8xxxu.ko" -exec cp -v {} ../output/ \;
-          find . -name "mac80211.ko" -exec cp -v {} ../output/ \; 2>/dev/null || true
-          find . -name "cfg80211.ko" -exec cp -v {} ../output/ \; 2>/dev/null || true
 
-      - name: Upload Module Artifact
+          MODULE="drivers/net/wireless/realtek/rtl8xxxu/rtl8xxxu.ko"
+
+          cp -v "$MODULE" ../output/rtl8xxxu.ko
+
+          # Module metadata
+          if command -v modinfo >/dev/null 2>&1; then
+            modinfo "$MODULE" > ../output/rtl8xxxu.modinfo.txt || true
+          fi
+
+          # Kernel configuration used to build the module
+          cp .config ../output/kernel.config
+
+          # Kernel version
+          make kernelversion > ../output/kernel.version
+
+          # Git commit
+          git rev-parse HEAD > ../output/kernel.commit
+
+          # Git description
+          git describe --always --dirty > ../output/kernel.git-description || true
+
+          echo
+          echo "========== MODULE INFO =========="
+
+          file ../output/rtl8xxxu.ko
+
+          echo
+          modinfo ../output/rtl8xxxu.ko || true
+
+          echo
+          echo "================================="
+
+
+      # ------------------------------------------------------------
+      # 10. Check module dependencies
+      # ------------------------------------------------------------
+      - name: Generate Module Dependency Information
+        run: |
+          set -eux
+
+          cd source
+
+          mkdir -p ../output/lib/modules
+
+          KVER="$(cat ../output/kernel.version)"
+
+          mkdir -p "../output/lib/modules/$KVER/kernel/drivers/net/wireless/realtek/rtl8xxxu"
+
+          cp \
+            ../output/rtl8xxxu.ko \
+            "../output/lib/modules/$KVER/kernel/drivers/net/wireless/realtek/rtl8xxxu/"
+
+          # Generate dependency files without installing anything
+          depmod \
+            -b ../output \
+            "$KVER" \
+            || true
+
+          echo
+          echo "Output tree:"
+          find ../output -type f -print
+
+
+      # ------------------------------------------------------------
+      # 11. Check RTL8192EU USB IDs in compiled module
+      # ------------------------------------------------------------
+      - name: Verify RTL8192EU Support
+        run: |
+          set -eux
+
+          echo "Checking compiled module for RTL8192EU references..."
+
+          strings output/rtl8xxxu.ko | \
+            grep -Ei \
+            '8192EU|RTL8192E|0bda' \
+            | head -50 \
+            || true
+
+          echo
+          echo "Checking module information..."
+
+          modinfo output/rtl8xxxu.ko || true
+
+
+      # ------------------------------------------------------------
+      # 12. Create README
+      # ------------------------------------------------------------
+      - name: Create Driver README
+        run: |
+          set -eux
+
+          KVER="$(cat output/kernel.version)"
+          COMMIT="$(cat output/kernel.commit)"
+
+          cat > output/README.txt <<EOF
+          RTL8192EU / RTL8XXXU Samsung S5E8535 Kernel Module
+          ==================================================
+
+          Kernel:
+          $KVER
+
+          Source commit:
+          $COMMIT
+
+          Architecture:
+          arm64
+
+          Compiler:
+          Clang / LLVM
+
+          Driver:
+          rtl8xxxu
+
+          Module:
+          rtl8xxxu.ko
+
+
+          IMPORTANT
+          ---------
+
+          This module MUST match the kernel running on the Android device.
+
+          Check the phone kernel with:
+
+              uname -a
+              uname -r
+
+          Check module information with:
+
+              modinfo rtl8xxxu.ko
+
+
+          Test loading:
+
+              su
+              insmod /path/to/rtl8xxxu.ko
+
+          Then check:
+
+              dmesg | tail -100
+
+          And:
+
+              ip link
+              iw dev
+
+
+          If you receive:
+
+              Invalid module format
+
+          check:
+
+              dmesg | grep -i -E 'rtl8xxxu|module|vermagic'
+
+          The most common reason is a kernel/module version or
+          CONFIG_MODVERSIONS mismatch.
+          EOF
+
+
+      # ------------------------------------------------------------
+      # 13. Upload artifact
+      # ------------------------------------------------------------
+      - name: Upload RTL8192EU Module
         uses: actions/upload-artifact@v4
         with:
-          name: rtl8xxxu-kernel-modules
-          path: output/*.ko
+          name: rtl8192eu-s5e8535-${{ github.run_number }}
+          path: output/
+          if-no-files-found: error
+          retention-days: 30
