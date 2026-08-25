@@ -11,19 +11,13 @@ jobs:
       - name: Install Toolchain & Dependencies
         run: |
           sudo apt update -qq
-          sudo apt install -y -qq build-essential bc bison flex libssl-dev git libelf-dev clang lld llvm gcc-aarch64-linux-gnu curl tar
+          sudo apt install -y -qq build-essential bc bison flex libssl-dev git libelf-dev clang lld llvm gcc-aarch64-linux-gnu
 
-      - name: Clone Kernel Source & Download 5.15-Patched Driver
+      - name: Clone Samsung Kernel Source
         run: |
           git clone --depth=1 https://github.com/devhunter1/android_kernel_samsung_s5e8535.git source
-          mkdir -p source/drivers/net/wireless/rtl8192eu
-          # Download 5.15/5.16 patched driver codebase
-          curl -sL https://github.com/quickreflex/rtl8192eu-5.15.77/archive/refs/heads/main.tar.gz | tar -xz -C source/drivers/net/wireless/rtl8192eu --strip-components=1
-          echo "obj-m += rtl8192eu/" >> source/drivers/net/wireless/Makefile
-          sed -i 's/---help---/help/g' source/drivers/net/wireless/rtl8192eu/Kconfig || true
-          sed -i '/endif/i source "drivers/net/wireless/rtl8192eu/Kconfig"' source/drivers/net/wireless/Kconfig
 
-      - name: Prepare Kernel Headers
+      - name: Configure & Build In-Tree Realtek Driver
         run: |
           cd source
           export ARCH=arm64
@@ -35,23 +29,23 @@ jobs:
           export LLVM_IAS=1
 
           make gki_defconfig
-          scripts/config --module CONFIG_RTL8192EU
+
+          # Enable mac80211, cfg80211 and the native rtl8xxxu driver
+          scripts/config --enable CONFIG_WIRELESS
+          scripts/config --enable CONFIG_CFG80211
+          scripts/config --enable CONFIG_MAC80211
+          scripts/config --module CONFIG_RTL8XXXU
+          scripts/config --enable CONFIG_RTL8XXXU_UNTESTED
+
           make modules_prepare
+          make -j$(nproc) M=drivers/net/wireless/realtek/rtl8xxxu modules KCFLAGS="-Wno-error"
 
-      - name: Build 8192eu.ko Module
-        run: |
-          cd source
-          export ARCH=arm64
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CC=clang
-          export LLVM=1
-          export LLVM_IAS=1
-          export KBUILD_MODPOST_WARN=1
+          # Create output folder and copy generated module
+          mkdir -p ../output
+          find drivers/net/wireless/realtek/rtl8xxxu/ -name "*.ko" -exec cp {} ../output/ \;
 
-          make -j$(nproc) M=drivers/net/wireless/rtl8192eu modules KCFLAGS="-Wno-error -Wno-incompatible-pointer-types -Wno-declaration-after-statement -Wno-unused-function -Wno-unused-variable -Wno-enum-conversion -Wno-header-guard"
-
-      - name: Upload Finished Driver Artifact
+      - name: Upload Module Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rtl8192eu-module
-          path: source/drivers/net/wireless/rtl8192eu/8192eu.ko
+          name: rtl8192eu-native-module
+          path: output/*.ko
