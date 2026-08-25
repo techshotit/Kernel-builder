@@ -36,6 +36,17 @@ jobs:
             https://github.com/devhunter1/android_kernel_samsung_s5e8535.git \
             source
 
+      - name: Check RTL8XXXU Kconfig
+        run: |
+          cd source
+
+          echo "===== RTL8XXXU KCONFIG ====="
+          cat drivers/net/wireless/realtek/rtl8xxxu/Kconfig
+
+          echo
+          echo "===== RTL8XXXU MAKEFILE ====="
+          cat drivers/net/wireless/realtek/rtl8xxxu/Makefile
+
       - name: Configure Kernel
         run: |
           cd source
@@ -58,19 +69,34 @@ jobs:
           scripts/config --enable CONFIG_MAC80211
           scripts/config --enable CONFIG_USB
           scripts/config --enable CONFIG_MODULES
+
+          # Enable RTL8XXXU as a module.
           scripts/config --module CONFIG_RTL8XXXU
 
-          if grep -q "config RTL8XXXU_UNTESTED" \
-            drivers/net/wireless/realtek/rtl8xxxu/Kconfig; then
-            scripts/config --enable CONFIG_RTL8XXXU_UNTESTED
-          fi
-
+          # Resolve configuration.
           make olddefconfig
 
-          echo "RTL8XXXU:"
-          grep CONFIG_RTL8XXXU .config || true
+          echo
+          echo "===== FINAL CONFIG ====="
 
-      - name: Prepare Module Build
+          grep -E \
+            'RTL8XXXU|CFG80211|MAC80211|WLAN|USB|MODULES' \
+            .config || true
+
+          echo
+          echo "===== CONFIG CHECK ====="
+
+          if grep -q '^CONFIG_RTL8XXXU=m' .config; then
+            echo "SUCCESS: CONFIG_RTL8XXXU=m"
+          elif grep -q '^CONFIG_RTL8XXXU=y' .config; then
+            echo "ERROR: RTL8XXXU is built into kernel (y), not module"
+            exit 1
+          else
+            echo "ERROR: CONFIG_RTL8XXXU is missing"
+            exit 1
+          fi
+
+      - name: Prepare Kernel
         run: |
           cd source
 
@@ -102,27 +128,34 @@ jobs:
             modules \
             KCFLAGS="-Wno-error"
 
-      - name: Check Driver
+      - name: Verify Driver
         run: |
           cd source
 
-          echo "Searching for rtl8xxxu.ko..."
+          echo "===== SEARCHING FOR MODULE ====="
 
           find . -name "rtl8xxxu.ko" -print
 
           if [ ! -f \
             drivers/net/wireless/realtek/rtl8xxxu/rtl8xxxu.ko ]; then
 
+            echo
             echo "ERROR: rtl8xxxu.ko was not created"
 
             echo
-            echo "Configuration:"
+            echo "CONFIG:"
             grep -E \
-              'CONFIG_(RTL8XXXU|CFG80211|MAC80211|WLAN|USB|MODULES)=' \
+              'CONFIG_(RTL8XXXU|CFG80211|MAC80211|WLAN|USB|MODULES)' \
               .config || true
 
             echo
-            echo "Driver directory:"
+            echo "MODULE ORDER:"
+            cat \
+              drivers/net/wireless/realtek/rtl8xxxu/modules.order \
+              || true
+
+            echo
+            echo "DRIVER DIRECTORY:"
             ls -la \
               drivers/net/wireless/realtek/rtl8xxxu/
 
@@ -130,7 +163,13 @@ jobs:
           fi
 
           echo
-          echo "RTL8XXXU MODULE SUCCESSFULLY BUILT"
+          echo "======================================"
+          echo "SUCCESS"
+          echo "rtl8xxxu.ko CREATED"
+          echo "======================================"
+
+          file \
+            drivers/net/wireless/realtek/rtl8xxxu/rtl8xxxu.ko
 
       - name: Create Output
         run: |
@@ -144,7 +183,8 @@ jobs:
             output/kernel.config
 
           if [ -f source/Module.symvers ]; then
-            cp source/Module.symvers output/Module.symvers
+            cp source/Module.symvers \
+              output/Module.symvers
           fi
 
           cd source
@@ -152,10 +192,7 @@ jobs:
 
           cd ..
 
-          file output/rtl8xxxu.ko
-
-          echo
-          echo "Output:"
+          echo "===== OUTPUT ====="
           ls -lh output/
 
       - name: Upload Driver
