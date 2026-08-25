@@ -8,37 +8,17 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Install Build Tools
+      - name: Install Toolchain & Dependencies
         run: |
           sudo apt update -qq
           sudo apt install -y -qq build-essential bc bison flex libssl-dev git libelf-dev clang lld llvm gcc-aarch64-linux-gnu
 
-      - name: Clone Kernel & Driver
+      - name: Clone Kernel Source & 5.15 Ready Driver
         run: |
           git clone --depth=1 https://github.com/devhunter1/android_kernel_samsung_s5e8535.git source
-          cd source/drivers/net/wireless
-          git clone --depth=1 https://github.com/Mange/rtl8192eu-linux-driver.git rtl8192eu
-          echo "obj-m += rtl8192eu/" >> Makefile
-          sed -i 's/---help---/help/g' rtl8192eu/Kconfig || true
-          sed -i '/endif/i source "drivers/net/wireless/rtl8192eu/Kconfig"' Kconfig
+          git clone --depth=1 https://github.com/lwfinger/rtl8192eu.git rtl8192eu
 
-      - name: Patch Driver for Linux 5.15+ GKI APIs
-        run: |
-          cd source/drivers/net/wireless/rtl8192eu
-          
-          # Fix 1: Fix cfg80211_ch_switch_notify argument count
-          sed -i 's/cfg80211_ch_switch_notify(adapter->pnetdev, &chdef);/cfg80211_ch_switch_notify(adapter->pnetdev, \&chdef, 0, 0);/g' os_dep/linux/ioctl_cfg80211.c || true
-
-          # Fix 2: Remove obsolete current_bss check
-          sed -i 's/if (wdev->current_bss)/if (0)/g' os_dep/linux/ioctl_cfg80211.c || true
-
-          # Fix 3: Fix roam_info.bssid missing member
-          sed -i 's/roam_info.bssid =/ \/\/ roam_info.bssid =/g' os_dep/linux/ioctl_cfg80211.c || true
-
-          # Fix 4: Fix function pointer mismatch for stop_ap and get_channel
-          sed -i 's/\.stop_ap = cfg80211_rtw_stop_ap,/\/\/ .stop_ap = cfg80211_rtw_stop_ap,/g' os_dep/linux/ioctl_cfg80211.c || true
-
-      - name: Build Standalone Module
+      - name: Prepare Kernel Headers
         run: |
           cd source
           export ARCH=arm64
@@ -48,15 +28,28 @@ jobs:
           export CROSS_COMPILE=aarch64-linux-gnu-
           export LLVM=1
           export LLVM_IAS=1
-          export KCFLAGS="-Wno-error -Wno-incompatible-function-pointer-types -Wno-header-guard -Wno-unused-variable -Wno-unused-function -Wno-enum-conversion"
 
           make gki_defconfig
-          scripts/config --module CONFIG_RTL8192EU
+          scripts/config --disable CONFIG_MODULE_SIG
+          scripts/config --enable CONFIG_WIRELESS
+          scripts/config --enable CONFIG_CFG80211
+          scripts/config --enable CONFIG_MAC80211
           make modules_prepare
-          make -j$(nproc) M=drivers/net/wireless/rtl8192eu modules
 
-      - name: Upload Finished Driver
+      - name: Build 8192eu.ko Module
+        run: |
+          cd rtl8192eu
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CC=clang
+          export LLVM=1
+          export LLVM_IAS=1
+          export KBUILD_MODPOST_WARN=1
+
+          make -C ../source M=$PWD modules EXTRA_CFLAGS="-Wno-error -Wno-incompatible-pointer-types -Wno-declaration-after-statement -Wno-unused-function"
+
+      - name: Upload Finished Driver Artifact
         uses: actions/upload-artifact@v4
         with:
           name: rtl8192eu-module
-          path: source/drivers/net/wireless/rtl8192eu/8192eu.ko
+          path: rtl8192eu/8192eu.ko
