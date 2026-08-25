@@ -1,32 +1,16 @@
-name: Build RTL8192EU Kernel Module - S5E8535
+name: Build RTL8192EU Driver
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    name: Build RTL8XXXU for Samsung S5E8535
     runs-on: ubuntu-22.04
 
-    env:
-      ARCH: arm64
-      SUBARCH: arm64
-      LLVM: 1
-      LLVM_IAS: 1
-      CLANG_TRIPLE: aarch64-linux-gnu-
-      CROSS_COMPILE: aarch64-linux-gnu-
-
     steps:
-
-      # ============================================================
-      # 1. Install dependencies
-      # ============================================================
-      - name: Install Toolchain
+      - name: Install Dependencies
         run: |
-          set -eux
-
           sudo apt-get update
-
           sudo apt-get install -y \
             build-essential \
             bc \
@@ -34,7 +18,6 @@ jobs:
             flex \
             libssl-dev \
             libelf-dev \
-            libdw-dev \
             git \
             clang \
             lld \
@@ -46,97 +29,14 @@ jobs:
             cpio \
             kmod
 
-          clang --version
-          ld.lld --version
-          aarch64-linux-gnu-gcc --version
-
-
-      # ============================================================
-      # 2. Clone Samsung S5E8535 kernel
-      # ============================================================
-      - name: Clone Samsung Kernel
+      - name: Clone Kernel
         run: |
-          set -eux
-
           git clone --depth=1 \
             https://github.com/devhunter1/android_kernel_samsung_s5e8535.git \
             source
 
-          cd source
-
-          echo "======================================"
-          echo "KERNEL SOURCE"
-          echo "======================================"
-
-          git branch -a || true
-          git log -1 --oneline
-
-          echo
-          echo "Kernel version:"
-          make kernelversion || true
-
-
-      # ============================================================
-      # 3. Verify RTL8XXXU source
-      # ============================================================
-      - name: Verify RTL8192EU Source
-        run: |
-          set -eux
-
-          cd source
-
-          DRIVER="drivers/net/wireless/realtek/rtl8xxxu"
-
-          test -d "$DRIVER"
-
-          echo "RTL8XXXU directory:"
-          ls -la "$DRIVER"
-
-          echo
-          echo "RTL8192E files:"
-          find "$DRIVER" \
-            -type f \
-            -iname '*8192e*' \
-            -print
-
-          echo
-          echo "RTL8192E references:"
-          grep -Rni \
-            -E '8192EU|RTL8192E|8192E' \
-            "$DRIVER" \
-            || true
-
-
-      # ============================================================
-      # 4. Apply Samsung source fix
-      # ============================================================
-      - name: Apply Source Fixes
-        run: |
-          set -eux
-
-          cd source
-
-          if grep -q \
-            "BUG_ON(is_continuously_busy > 1);" \
-            kernel/workqueue.c; then
-
-            sed -i \
-              's/BUG_ON(is_continuously_busy > 1);//g' \
-              kernel/workqueue.c
-
-            echo "Samsung workqueue fix applied."
-          else
-            echo "Workqueue bug not present."
-          fi
-
-
-      # ============================================================
-      # 5. Configure kernel
-      # ============================================================
       - name: Configure Kernel
         run: |
-          set -eux
-
           cd source
 
           export ARCH=arm64
@@ -147,66 +47,26 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=aarch64-linux-gnu-
 
-          echo "Creating GKI configuration..."
-
           make gki_defconfig
-
-          echo
-          echo "Enabling networking..."
 
           scripts/config --enable CONFIG_NET
           scripts/config --enable CONFIG_NETDEVICES
           scripts/config --enable CONFIG_WLAN
           scripts/config --enable CONFIG_WIRELESS
-
-          echo
-          echo "Enabling cfg80211/mac80211..."
-
           scripts/config --enable CONFIG_CFG80211
           scripts/config --enable CONFIG_MAC80211
-
-          echo
-          echo "Enabling USB..."
-
           scripts/config --enable CONFIG_USB
-
-          echo
-          echo "Enabling RTL8XXXU..."
-
-          scripts/config --module CONFIG_RTL8XXXU
-
-          # This option exists in some kernel versions.
-          if grep -q "CONFIG_RTL8XXXU_UNTESTED" \
-            drivers/net/wireless/realtek/rtl8xxxu/Kconfig; then
-
-            scripts/config --enable CONFIG_RTL8XXXU_UNTESTED
-          fi
-
-          echo
-          echo "Enabling module support..."
-
           scripts/config --enable CONFIG_MODULES
+          scripts/config --module CONFIG_RTL8XXXU
 
           make olddefconfig
 
           echo
-          echo "======================================"
-          echo "FINAL RTL CONFIG"
-          echo "======================================"
+          echo "RTL8XXXU configuration:"
+          grep CONFIG_RTL8XXXU .config || true
 
-          grep -E \
-            'CONFIG_(NET|NETDEVICES|WLAN|WIRELESS|CFG80211|MAC80211|USB|MODULES|MODVERSIONS|RTL8XXXU)' \
-            .config \
-            || true
-
-
-      # ============================================================
-      # 6. Prepare build
-      # ============================================================
       - name: Prepare Kernel
         run: |
-          set -eux
-
           cd source
 
           export ARCH=arm64
@@ -217,20 +77,11 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=aarch64-linux-gnu-
 
-          make -j"$(nproc)" prepare
+          make prepare
+          make modules_prepare
 
-          make -j"$(nproc)" modules_prepare
-
-
-      # ============================================================
-      # 7. Build kernel symbol information
-      #
-      # This is important for M= module builds.
-      # ============================================================
-      - name: Generate Kernel Symbols
+      - name: Build Kernel Symbols
         run: |
-          set -eux
-
           cd source
 
           export ARCH=arm64
@@ -241,39 +92,17 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=aarch64-linux-gnu-
 
-          echo "Building vmlinux..."
-
-          make -j"$(nproc)" \
-            vmlinux \
-            KCFLAGS="-Wno-error" \
-            2>&1 | tee ../vmlinux-build.log
-
-          echo
-          echo "Checking Module.symvers..."
+          make -j$(nproc) vmlinux KCFLAGS="-Wno-error"
 
           if [ ! -f Module.symvers ]; then
-            echo
-            echo "ERROR: Module.symvers was not generated."
-            echo
-            echo "Last vmlinux build output:"
-            tail -200 ../vmlinux-build.log
+            echo "ERROR: Module.symvers not found"
             exit 1
           fi
 
-          ls -lh Module.symvers
+          echo "Module.symvers created successfully"
 
-          echo
-          echo "Module.symvers symbol count:"
-          wc -l Module.symvers
-
-
-      # ============================================================
-      # 8. Build RTL8XXXU module
-      # ============================================================
-      - name: Build RTL8XXXU
+      - name: Build RTL8192EU Driver
         run: |
-          set -eux
-
           cd source
 
           export ARCH=arm64
@@ -284,230 +113,58 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=aarch64-linux-gnu-
 
-          echo "======================================"
-          echo "BUILDING RTL8XXXU"
-          echo "======================================"
-
-          make -j"$(nproc)" \
+          make -j$(nproc) \
             M=drivers/net/wireless/realtek/rtl8xxxu \
             modules \
-            KCFLAGS="-Wno-error" \
-            2>&1 | tee ../rtl8xxxu-build.log
+            KCFLAGS="-Wno-error"
 
-
-      # ============================================================
-      # 9. Diagnose module if missing
-      # ============================================================
-      - name: Verify RTL8XXXU Module
+      - name: Find Driver
         run: |
-          set -eux
-
           cd source
 
-          echo
           echo "Searching for rtl8xxxu.ko..."
 
-          find . \
-            -type f \
-            -name "rtl8xxxu.ko" \
-            -print
+          find . -name "rtl8xxxu.ko" -print
 
-          if ! find . -type f -name "rtl8xxxu.ko" | grep -q .; then
-
+          if [ ! -f drivers/net/wireless/realtek/rtl8xxxu/rtl8xxxu.ko ]; then
             echo
-            echo "======================================"
-            echo "ERROR: rtl8xxxu.ko NOT FOUND"
-            echo "======================================"
-
+            echo "ERROR: rtl8xxxu.ko was not created"
             echo
-            echo "Kconfig:"
-            grep -n \
-              -E 'RTL8XXXU|8192' \
-              drivers/net/wireless/realtek/rtl8xxxu/Kconfig \
-              || true
-
+            echo "RTL8XXXU config:"
+            grep CONFIG_RTL8XXXU .config || true
             echo
-            echo "Final configuration:"
-            grep -E \
-              'CONFIG_(RTL8XXXU|CFG80211|MAC80211|USB|MODULES)' \
-              .config \
-              || true
-
-            echo
-            echo "Module.symvers:"
-            ls -lh Module.symvers || true
-
-            echo
-            echo "RTL8XXXU directory:"
-            find \
-              drivers/net/wireless/realtek/rtl8xxxu \
-              -maxdepth 2 \
-              -type f \
-              -print
-
-            echo
-            echo "Last 300 lines of build log:"
-            tail -300 ../rtl8xxxu-build.log || true
-
+            echo "Build files:"
+            ls -la drivers/net/wireless/realtek/rtl8xxxu/
             exit 1
           fi
 
-          echo
-          echo "rtl8xxxu.ko successfully built."
-
-
-      # ============================================================
-      # 10. Collect output
-      # ============================================================
-      - name: Package Module
+      - name: Prepare Output
         run: |
-          set -eux
+          mkdir -p output
+
+          cp source/drivers/net/wireless/realtek/rtl8xxxu/rtl8xxxu.ko \
+            output/
+
+          cp source/.config \
+            output/kernel.config
+
+          cp source/Module.symvers \
+            output/
 
           cd source
+          make kernelversion > ../output/kernel.version
 
-          mkdir -p ../output
+          cd ..
 
-          MODULE=$(find . \
-            -type f \
-            -name "rtl8xxxu.ko" \
-            | head -1)
+          echo "================================"
+          echo "BUILD SUCCESS"
+          echo "================================"
 
-          echo "Module:"
-          echo "$MODULE"
+          ls -lh output/
 
-          cp "$MODULE" ../output/rtl8xxxu.ko
-
-          cp .config \
-            ../output/kernel.config
-
-          cp Module.symvers \
-            ../output/Module.symvers
-
-          make kernelversion \
-            > ../output/kernel.version
-
-          git rev-parse HEAD \
-            > ../output/kernel.commit
-
-          git log -1 --oneline \
-            > ../output/kernel.commit.txt
-
-
-      # ============================================================
-      # 11. Module information
-      # ============================================================
-      - name: Generate Module Information
-        run: |
-          set -eux
-
-          echo "======================================"
-          echo "MODULE INFORMATION"
-          echo "======================================"
-
-          file output/rtl8xxxu.ko
-
-          echo
-          modinfo output/rtl8xxxu.ko || true
-
-          echo
-          echo "RTL8192E references:"
-          strings output/rtl8xxxu.ko \
-            | grep -Ei \
-              '8192EU|RTL8192E|0bda' \
-            | head -100 \
-            || true
-
-
-      # ============================================================
-      # 12. Create README
-      # ============================================================
-      - name: Create README
-        run: |
-          set -eux
-
-          cat > output/README.txt <<'EOF'
-          Samsung S5E8535 RTL8192EU Driver
-          =================================
-
-          Driver:
-          rtl8xxxu.ko
-
-          This is the Linux in-tree RTL8XXXU driver.
-
-          RTL8192E/RTL8192EU support is provided by the RTL8XXXU
-          driver contained in this Samsung kernel tree.
-
-
-          IMPORTANT
-          =========
-
-          The module must match the kernel running on the phone.
-
-          Before loading it, check:
-
-              uname -a
-              uname -r
-              cat /proc/version
-
-
-          To test:
-
-              su
-              insmod rtl8xxxu.ko
-
-          Then:
-
-              dmesg | tail -100
-              ip link
-              iw dev
-
-
-          If you receive:
-
-              Invalid module format
-
-          check:
-
-              dmesg | grep -i -E \
-                'rtl8xxxu|module|vermagic|version'
-
-
-          Common causes:
-
-          - Different kernel version
-          - Different kernel configuration
-          - CONFIG_MODVERSIONS mismatch
-          - Different Module.symvers
-          - Different compiler/toolchain
-          - Samsung-specific kernel ABI differences
-          EOF
-
-
-      # ============================================================
-      # 13. Upload successful build
-      # ============================================================
-      - name: Upload RTL8192EU Module
-        if: success()
+      - name: Upload Driver
         uses: actions/upload-artifact@v4
         with:
-          name: rtl8192eu-s5e8535-${{ github.run_number }}
+          name: rtl8192eu-s5e8535
           path: output/
           if-no-files-found: error
-          retention-days: 30
-
-
-      # ============================================================
-      # 14. Always upload logs
-      #
-      # This is VERY useful if the build fails.
-      # ============================================================
-      - name: Upload Build Logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: rtl8192eu-build-logs-${{ github.run_number }}
-          path: |
-            vmlinux-build.log
-            rtl8xxxu-build.log
-          if-no-files-found: ignore
-          retention-days: 30
