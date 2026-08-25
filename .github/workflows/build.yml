@@ -17,7 +17,7 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/devhunter1/android_kernel_samsung_s5e8535.git source
 
-      - name: Configure & Build In-Tree Realtek Driver
+      - name: Configure & Build Realtek In-Tree Driver
         run: |
           cd source
           export ARCH=arm64
@@ -30,22 +30,23 @@ jobs:
 
           make gki_defconfig
 
-          # Enable mac80211, cfg80211 and the native rtl8xxxu driver
+          # Enable mac80211, cfg80211 and rtl8xxxu driver
           scripts/config --enable CONFIG_WIRELESS
           scripts/config --enable CONFIG_CFG80211
           scripts/config --enable CONFIG_MAC80211
           scripts/config --module CONFIG_RTL8XXXU
           scripts/config --enable CONFIG_RTL8XXXU_UNTESTED
 
+          make olddefconfig
           make modules_prepare
-          make -j$(nproc) M=drivers/net/wireless/realtek/rtl8xxxu modules KCFLAGS="-Wno-error"
+          make -j$(nproc) M=drivers/net/wireless/realtek/rtl8xxxu KCFLAGS="-Wno-error"
 
-          # Create output folder and copy generated module
-          mkdir -p ../output
-          find drivers/net/wireless/realtek/rtl8xxxu/ -name "*.ko" -exec cp {} ../output/ \;
+          # Collect generated .ko files
+          mkdir -p ../artifacts
+          find . -name "*.ko" -exec cp {} ../artifacts/ \;
 
       - name: Upload Module Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rtl8192eu-native-module
-          path: output/*.ko
+          name: rtl8xxxu-driver-module
+          path: artifacts/*.ko
