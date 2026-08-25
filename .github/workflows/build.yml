@@ -17,9 +17,12 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/devhunter1/android_kernel_samsung_s5e8535.git source
 
-      - name: Configure and Full Module Build
+      - name: Fix Samsung Source Bug & Configure
         run: |
           cd source
+          # Fix Samsung's undeclared variable bug in workqueue.c
+          sed -i 's/BUG_ON(is_continuously_busy > 1);//g' kernel/workqueue.c
+
           export ARCH=arm64
           export SUBARCH=arm64
           export CC=clang
@@ -30,7 +33,7 @@ jobs:
 
           make gki_defconfig
 
-          # Enable complete networking, mac80211, and Realtek rtl8xxxu
+          # Enable complete networking, mac80211, and Realtek driver
           scripts/config --enable CONFIG_NETDEVICES
           scripts/config --enable CONFIG_WLAN
           scripts/config --enable CONFIG_WIRELESS
@@ -40,11 +43,11 @@ jobs:
           scripts/config --enable CONFIG_RTL8XXXU_UNTESTED
 
           make olddefconfig
-          
-          # Step 1: Build kernel symbols required for .ko linking
+
+          # Step 1: Build kernel symbols
           make -j$(nproc) vmlinux KCFLAGS="-Wno-error"
-          
-          # Step 2: Build and link all kernel modules into binary .ko files
+
+          # Step 2: Build and link all kernel modules
           make -j$(nproc) modules KCFLAGS="-Wno-error"
 
           # Step 3: Collect generated .ko files
