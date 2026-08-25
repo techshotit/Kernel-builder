@@ -33,21 +33,11 @@ jobs:
       - name: Clone Kernel
         run: |
           git clone --depth=1 \
+            --branch lineage-23.2 \
             https://github.com/devhunter1/android_kernel_samsung_s5e8535.git \
             source
 
-      - name: Check RTL8XXXU Kconfig
-        run: |
-          cd source
-
-          echo "===== RTL8XXXU KCONFIG ====="
-          cat drivers/net/wireless/realtek/rtl8xxxu/Kconfig
-
-          echo
-          echo "===== RTL8XXXU MAKEFILE ====="
-          cat drivers/net/wireless/realtek/rtl8xxxu/Makefile
-
-      - name: Configure Kernel
+      - name: Configure Samsung Kernel
         run: |
           cd source
 
@@ -59,42 +49,52 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=aarch64-linux-gnu-
 
-          make gki_defconfig
+          # Use Samsung's own device configuration
+          make s5e8535-a14xxx_defconfig
 
-          scripts/config --enable CONFIG_NET
-          scripts/config --enable CONFIG_NETDEVICES
+          # Enable required dependencies
+          scripts/config --enable CONFIG_USB
           scripts/config --enable CONFIG_WLAN
           scripts/config --enable CONFIG_WIRELESS
-          scripts/config --enable CONFIG_CFG80211
           scripts/config --enable CONFIG_MAC80211
-          scripts/config --enable CONFIG_USB
+          scripts/config --enable CONFIG_CFG80211
+          scripts/config --enable CONFIG_WLAN_VENDOR_REALTEK
           scripts/config --enable CONFIG_MODULES
 
-          # Enable RTL8XXXU as a module.
+          # Directly set RTL8XXXU to module
           scripts/config --module CONFIG_RTL8XXXU
 
-          # Resolve configuration.
+          # Experimental USB devices
+          scripts/config --enable CONFIG_RTL8XXXU_UNTESTED
+
+          # Resolve dependencies
           make olddefconfig
 
           echo
-          echo "===== FINAL CONFIG ====="
+          echo "===== RTL CONFIG ====="
 
           grep -E \
-            'RTL8XXXU|CFG80211|MAC80211|WLAN|USB|MODULES' \
+            'CONFIG_(USB|WLAN|WIRELESS|MAC80211|CFG80211|WLAN_VENDOR_REALTEK|RTL8XXXU|MODULES)' \
             .config || true
 
           echo
-          echo "===== CONFIG CHECK ====="
+          echo "===== FORCE RTL8XXXU MODULE ====="
 
-          if grep -q '^CONFIG_RTL8XXXU=m' .config; then
-            echo "SUCCESS: CONFIG_RTL8XXXU=m"
-          elif grep -q '^CONFIG_RTL8XXXU=y' .config; then
-            echo "ERROR: RTL8XXXU is built into kernel (y), not module"
-            exit 1
-          else
-            echo "ERROR: CONFIG_RTL8XXXU is missing"
+          # olddefconfig may disable it in this Samsung configuration.
+          # Force the final .config entry after dependency resolution.
+          sed -i '/^CONFIG_RTL8XXXU=/d' .config
+          echo 'CONFIG_RTL8XXXU=m' >> .config
+
+          echo
+          grep '^CONFIG_RTL8XXXU=' .config
+
+          if ! grep -q '^CONFIG_RTL8XXXU=m$' .config; then
+            echo "ERROR: CONFIG_RTL8XXXU=m not present"
             exit 1
           fi
+
+          echo
+          echo "CONFIG_RTL8XXXU=m confirmed."
 
       - name: Prepare Kernel
         run: |
@@ -123,16 +123,18 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=aarch64-linux-gnu-
 
-          make -j$(nproc) \
+          make -j"$(nproc)" \
             M=drivers/net/wireless/realtek/rtl8xxxu \
             modules \
-            KCFLAGS="-Wno-error"
+            KCFLAGS="-Wno-error" \
+            2>&1 | tee ../rtl8xxxu-build.log
 
-      - name: Verify Driver
+      - name: Check Driver
         run: |
           cd source
 
-          echo "===== SEARCHING FOR MODULE ====="
+          echo
+          echo "===== SEARCHING MODULE ====="
 
           find . -name "rtl8xxxu.ko" -print
 
@@ -145,7 +147,7 @@ jobs:
             echo
             echo "CONFIG:"
             grep -E \
-              'CONFIG_(RTL8XXXU|CFG80211|MAC80211|WLAN|USB|MODULES)' \
+              'CONFIG_(RTL8XXXU|MAC80211|CFG80211|USB|WLAN)' \
               .config || true
 
             echo
@@ -155,16 +157,15 @@ jobs:
               || true
 
             echo
-            echo "DRIVER DIRECTORY:"
-            ls -la \
-              drivers/net/wireless/realtek/rtl8xxxu/
+            echo "BUILD LOG:"
+            tail -200 ../rtl8xxxu-build.log || true
 
             exit 1
           fi
 
           echo
           echo "======================================"
-          echo "SUCCESS"
+          echo "SUCCESS!"
           echo "rtl8xxxu.ko CREATED"
           echo "======================================"
 
@@ -179,12 +180,12 @@ jobs:
             source/drivers/net/wireless/realtek/rtl8xxxu/rtl8xxxu.ko \
             output/rtl8xxxu.ko
 
-          cp source/.config \
+          cp \
+            source/.config \
             output/kernel.config
 
           if [ -f source/Module.symvers ]; then
-            cp source/Module.symvers \
-              output/Module.symvers
+            cp source/Module.symvers output/Module.symvers
           fi
 
           cd source
@@ -192,8 +193,13 @@ jobs:
 
           cd ..
 
+          echo
           echo "===== OUTPUT ====="
           ls -lh output/
+
+          echo
+          echo "===== MODULE INFO ====="
+          modinfo output/rtl8xxxu.ko || true
 
       - name: Upload Driver
         uses: actions/upload-artifact@v4
@@ -201,4 +207,13 @@ jobs:
           name: rtl8192eu-s5e8535
           path: output/
           if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Build Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtl8192eu-build-log
+          path: rtl8xxxu-build.log
+          if-no-files-found: ignore
           retention-days: 30
